@@ -2,6 +2,6 @@ global:
   scrape_interval: 5s
 
 scrape_configs:
-  - job_name: 'book_api'
+  - job_name: 'api-book'
     static_configs:
-      - targets: ['host.docker.internal:8001']  # Use localhost:8001 se não usar Docker
+      - targets: ['host.docker.internal:8000']
