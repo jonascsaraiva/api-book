@@ -1,69 +1,65 @@
-from http.server import BaseHTTPRequestHandler, HTTPServer
+# server.py
 import json
-import logging
-from prometheus_client import Counter, generate_latest, CONTENT_TYPE_LATEST, start_http_server
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import urlparse
 
-# Configura logs
-logging.basicConfig(level=logging.INFO)
+books = [
+    {"id": 1, "title": "1984", "author": "George Orwell"},
+    {"id": 2, "title": "Brave New World", "author": "Aldous Huxley"}
+]
+next_id = 3
 
-# Inicia Prometheus em porta separada
-start_http_server(8001)
-
-# Métricas Prometheus
-REQUEST_COUNTER = Counter(
-    'api_requests_total',
-    'Total de requisições na API',
-    ['method', 'endpoint', 'status_code']
-)
-
-# Dados em memória
-books = []
-
-class SimpleHandler(BaseHTTPRequestHandler):
+class SimpleAPI(BaseHTTPRequestHandler):
+    def _set_headers(self, status=200):
+        self.send_response(status)
+        self.send_header('Content-type', 'application/json')
+        self.end_headers()
 
     def do_GET(self):
-        if self.path == '/books':
-            self._send_response(200, books, method='GET', endpoint='/books')
-        elif self.path == '/health':
-            self._send_response(200, {'status': 'ok'}, method='GET', endpoint='/health')
-        elif self.path == '/metrics':
-            self.send_response(200)
-            self.send_header("Content-Type", CONTENT_TYPE_LATEST)
-            self.end_headers()
-            self.wfile.write(generate_latest())
+        parsed_path = urlparse(self.path)
+        path_parts = parsed_path.path.strip('/').split('/')
+
+        if path_parts[0] == 'books':
+            if len(path_parts) == 1:
+                self._set_headers()
+                self.wfile.write(json.dumps(books).encode())
+            elif len(path_parts) == 2:
+                try:
+                    book_id = int(path_parts[1])
+                    book = next((b for b in books if b["id"] == book_id), None)
+                    if book:
+                        self._set_headers()
+                        self.wfile.write(json.dumps(book).encode())
+                    else:
+                        self._set_headers(404)
+                        self.wfile.write(json.dumps({"error": "Book not found"}).encode())
+                except ValueError:
+                    self._set_headers(400)
+                    self.wfile.write(json.dumps({"error": "Invalid ID"}).encode())
         else:
-            self._send_response(404, {'error': 'Not found'}, method='GET', endpoint=self.path)
+            self._set_headers(404)
+            self.wfile.write(json.dumps({"error": "Not found"}).encode())
 
     def do_POST(self):
+        global next_id
         if self.path == '/books':
-            length = int(self.headers.get('Content-Length', 0))
-            data = self.rfile.read(length)
-            book = json.loads(data)
-            books.append(book)
-            self._send_response(201, book, method='POST', endpoint='/books')
-        else:
-            self._send_response(404, {'error': 'Not found'}, method='POST', endpoint=self.path)
+            content_length = int(self.headers['Content-Length'])
+            body = self.rfile.read(content_length)
+            try:
+                data = json.loads(body)
+                new_book = {"id": next_id, "title": data["title"], "author": data["author"]}
+                books.append(new_book)
+                next_id += 1
+                self._set_headers(201)
+                self.wfile.write(json.dumps(new_book).encode())
+            except (json.JSONDecodeError, KeyError):
+                self._set_headers(400)
+                self.wfile.write(json.dumps({"error": "Invalid data"}).encode())
 
-    def do_DELETE(self):
-        if self.path.startswith('/books/'):
-            book_id = self.path.split('/')[-1]
-            global books
-            books = [b for b in books if str(b.get('id')) != book_id]
-            self._send_response(204, None, method='DELETE', endpoint='/books/:id')
-        else:
-            self._send_response(404, {'error': 'Not found'}, method='DELETE', endpoint=self.path)
-
-    def _send_response(self, code, data=None, method='GET', endpoint='unknown'):
-        # Registra no Prometheus
-        REQUEST_COUNTER.labels(method=method, endpoint=endpoint, status_code=str(code)).inc()
-
-        self.send_response(code)
-        self.send_header('Content-Type', 'application/json')
-        self.end_headers()
-        if data is not None and code != 204:
-            self.wfile.write(json.dumps(data).encode())
+def run():
+    server = HTTPServer(('0.0.0.0', 8000), SimpleAPI)
+    print("Server running on port 8000...")
+    server.serve_forever()
 
 if __name__ == '__main__':
-    logging.info("Iniciando API em http://localhost:8000")
-    server = HTTPServer(('0.0.0.0', 8000), SimpleHandler)
-    server.serve_forever()
+    run()
